@@ -4,6 +4,8 @@ import os
 import sys
 import dateutil.tz
 from shutil import copyfile
+import csv
+from scipy.stats import mode
 
 import keras
 import keras.backend as K
@@ -17,7 +19,7 @@ from keras.optimizers import Adam
 from utils import mylog
 
 class BidirectionalInfoGAN():
-    def __init__(self):
+    def __init__(self, load_dir=None, model_suffix=None):
         # Hyperparameters
         p = {}
         p['batch_size'] = 128
@@ -50,7 +52,13 @@ class BidirectionalInfoGAN():
         self.params = p
         
         self._init_model()
-        self.save_hyperparameters()
+        
+        if load_dir is not None:
+            self.log_dir = load_dir
+            self.load_hyperparameters()
+            self.load_model(model_suffix)
+        else:
+            self.save_hyperparameters()
     
     def _init_model(self):
         # Placeholders for the input values
@@ -131,7 +139,7 @@ class BidirectionalInfoGAN():
         base_dir = os.path.join(src_dir, "../")
         now = datetime.datetime.now(dateutil.tz.tzlocal())
         timestamp = now.strftime('%Y_%m_%d_%H_%M_%S')
-        timestamp = "temp"
+        timestamp = "test"
 
         self.log_dir = base_dir + "/logs/" + timestamp
 
@@ -155,6 +163,24 @@ class BidirectionalInfoGAN():
         copyfile(sys.argv[0], self.log_dir + "/" + sys.argv[0])
         copyfile(__file__, self.log_dir + "/" + os.path.basename(__file__))
     
+    def load_hyperparameters(self):
+        assert(os.path.exists(self.log_dir))
+        
+        reader = csv.reader(open(self.log_dir+"/hyperparameters.csv", "r"))
+        p = {}
+        for row in reader:
+            name, value = row
+            if isinstance(value, str) and not isinstance(self.params[name], str):
+                if isinstance(self.params[name], int):
+                    value = int(value)
+                if isinstance(self.params[name], float):
+                    value = float(value)
+                if isinstance(self.params[name], list):
+                    # convert to a list
+                    value = [int(char.strip('[],')) for char in value.split()]
+            p[name] = value
+        self.params = p
+    
     def save(self, suffix=None):
         if suffix is None:
             suffix = ""
@@ -163,8 +189,18 @@ class BidirectionalInfoGAN():
         
         path = self.get_log_dir()
         self.G.save(path + "/model_G" + suffix + ".h5")
-        self.G.save(path + "/model_E" + suffix + ".h5")
-        self.G.save(path + "/model_D" + suffix + ".h5")
+        self.E.save(path + "/model_E" + suffix + ".h5")
+        self.D.save(path + "/model_D" + suffix + ".h5")
+    
+    def load_model(self, suffix):
+        if suffix is None:
+            suffix = ""
+        else:
+            suffix = "_" + suffix
+        
+        self.G.load_weights(self.log_dir + "model_G" + suffix + ".h5")
+        self.E.load_weights(self.log_dir + "model_E" + suffix + ".h5")
+        self.D.load_weights(self.log_dir + "model_D" + suffix + ".h5")
     
     ############################################################
     ##################### Layer Shortcuts ######################
@@ -462,7 +498,7 @@ class BidirectionalInfoGAN():
         g_conv_out = Conv2DTranspose(
             filters=1,
             kernel_size=4,
-            activation='sigmoid',
+            activation='tanh',
             padding='same',
             strides=2,
             kernel_initializer='truncated_normal')(g_conv_1)
@@ -487,6 +523,39 @@ class BidirectionalInfoGAN():
         lossGE = self.train_GE_fn([X, z, c])
         
         return lossD, lossGE
+    
+    def evaluate(self, X, y, match='auto'):
+        num_categorical_vars = len(self.params['disc_vars'])
+        num_noise_vars = self.params['z_dim']
+        num_disc_vars = self.params['num_disc_vars']
+        
+        print("num_categorical_vars = ", num_categorical_vars)
+        print("disc_vars = ", self.params['disc_vars'])
+        print("type(disc_vars) = ", type(self.params['disc_vars']))
+        print("num_noise_vars = ", num_noise_vars)
+        print("type(num_noise_vars) = ", type(num_noise_vars))
+        print("num_disc_vars = ", num_disc_vars)
+        
+        assert(num_categorical_vars == 1)
+        
+        # Predict category index
+        encoding = self.E.predict(X)
+        c_enc = encoding[:, num_noise_vars:]
+        cat = np.argmax(c_enc[:,:num_disc_vars], axis=1)
+        
+        # Match category indices to true labels
+        pairs = np.zeros(shape=(num_disc_vars,))
+        for n in range(num_disc_vars):
+            true_labels = y[cat==n]
+            pairs[n], _ = mode(true_labels)
+        
+        yhat = [pairs[i] for i in cat]
+        
+        num_correct = sum([y1==y2 for y1,y2 in zip(y, yhat)])
+        num_total = len(y)
+        accuracy = num_correct / num_total
+        
+        return accuracy
     
     ############################################################
     #################### Sampling Utilities ####################

@@ -29,8 +29,12 @@ batch_size = bigan.params['batch_size']
 (X_train, _), (X_test,_) = mnist.load_data()
 X_train = np.expand_dims(X_train, axis=3)
 X_train = X_train.astype('float32')/255.0
+X_train = 2.0*X_train - 1.0 # Scale [-1,1] for tanh
 X_test = np.expand_dims(X_test, axis=3)
 X_test = X_test.astype('float32')/255.0
+X_test = 2.0*X_test - 1.0
+
+
 print("Shape of X_train: ", np.shape(X_train))
 data_size = np.shape(X_train)[0]
 X_test_batch = X_test[:1000] # No need to run all
@@ -58,12 +62,13 @@ for iteration in range(max_iters):
         c_base = bigan.sample_c(num_samples)
         c_dim = bigan.params['c_dim']
         c_base = np.random.uniform(-1.0, 1.0, size=(num_samples, c_dim))
-        c_base[:,:num_cats+1] = 0
+        c_base[:,:num_cats] = 0
         for catid in range(num_cats):
-            c_test = c_base
+            c_test = c_base.copy()
             c_test[:,catid] = 1
             encoding = np.concatenate((z_test, c_test), axis=1)
             gen = bigan.G.predict(encoding)
+            gen = 0.5*gen + 0.5 # scale back to [0,1]
             
             for sample in range(num_samples):
                 axs[catid, sample].imshow(gen[sample,:,:,0])
@@ -85,9 +90,10 @@ for iteration in range(max_iters):
         
         # Sample some real images and plot with encodings
         encoding = bigan.E.predict(X_test_batch)
+        c_encoding = encoding[:,bigan.params['z_dim']:]
         fig, axs = plt.subplots(num_cats, num_samples)
         for catid in range(num_cats):
-            topN_idx = np.argsort(encoding, axis=0)[-num_samples:, catid]
+            topN_idx = np.argsort(c_encoding, axis=0)[-num_samples:, catid]
             for n in range(num_samples):
                 axs[catid, n].imshow(X_test_batch[topN_idx[n],:,:,0])
         for rid in range(num_cats):
@@ -104,16 +110,22 @@ for iteration in range(max_iters):
         
         # Test continuous variables
         num_cont = bigan.params['num_cont_vars']
-        fig, axs = plt.subplots(num_cont, num_samples)
+        fig, axs = plt.subplots(num_cont*2, num_samples)
         for varid in range(num_cont):
-            topN_idx = np.argsort(encoding, axis=0)[-num_samples:, varid+num_cats]
+            topN_idx = np.argsort(c_encoding, axis=0)[-num_samples:, varid+num_cats]
             for n in range(num_samples):
-                axs[varid, n].imshow(X_test_batch[topN_idx[n],:,:,0])
+                axs[varid*2, n].imshow(X_test_batch[topN_idx[n],:,:,0])
+            bottomN_idx = np.argsort(c_encoding, axis=0)[:num_samples, varid+num_cats]
+            for n in range(num_samples):
+                axs[varid*2+1, n].imshow(X_test_batch[bottomN_idx[n],:,:,0])
         for rid in range(num_cont):
-            row_title = "Var" + str(rid)
-            axs[rid,0].set_ylabel(row_title,
+            row_title = "+Var" + str(rid)
+            axs[rid*2,0].set_ylabel(row_title,
                 rotation=0, size='large', horizontalalignment='right')
-        for rid in range(num_cont):
+            row_title = "-Var" + str(rid)
+            axs[rid*2+1,0].set_ylabel(row_title,
+                rotation=0, size='large', horizontalalignment='right')
+        for rid in range(num_cont*2):
             for cid in range(num_samples):
                 axs[rid,cid].set_xticks([])
                 axs[rid,cid].set_yticks([])
