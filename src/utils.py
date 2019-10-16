@@ -16,8 +16,6 @@ def get_min_idx(min, a):
 def sample_z(m, n):
     return np.random.uniform(-1., 1., size=[m, n])
 
-    return utils.smart_cond(training, add_noise, lambda: input_layer)
-
 
 def sample_z_fixed(m, n):
     z_out = np.zeros((m, n))
